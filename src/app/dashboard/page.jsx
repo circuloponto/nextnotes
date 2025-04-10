@@ -361,7 +361,7 @@ const Dashboard = () => {
               </motion.div>
             </div>
             
-            <div className="overflow-y-auto flex-1">
+            <div className="overflow-y-auto overflow-x-hidden flex-1">
               {isLoading ? (
                 <div className="flex justify-center items-center h-32">
                   <motion.div 
