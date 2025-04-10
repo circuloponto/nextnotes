@@ -5,7 +5,7 @@ import { useState, useEffect } from 'react';
 import Button from './ui/Button';
 import { ThemeToggle } from './ThemeToggle';
 import { motion, AnimatePresence } from 'framer-motion';
-import { getCurrentUser, signOut } from '@/services/auth';
+import { supabase } from '@/services/supabase';
 import { useRouter } from 'next/navigation';
 
 // Custom NavLink component with hover animation
@@ -144,21 +144,47 @@ const Navbar = () => {
   useEffect(() => {
     const fetchUser = async () => {
       try {
-        const { user: currentUser } = await getCurrentUser();
-        setUser(currentUser);
+        // First, get the session directly from Supabase
+        const { data: sessionData } = await supabase.auth.getSession();
+        
+        // If we have a session, get the user
+        if (sessionData?.session) {
+          const { data } = await supabase.auth.getUser();
+          console.log('User found in Navbar:', data.user);
+          setUser(data.user);
+        } else {
+          console.log('No session found in Navbar');
+          setUser(null);
+        }
       } catch (error) {
-        console.error('Error fetching user:', error);
+        console.error('Error in Navbar auth:', error);
+        setUser(null);
       } finally {
         setMounted(true);
       }
     };
     
     fetchUser();
+    
+    // Set up auth state change listener
+    const { data: authListener } = supabase.auth.onAuthStateChange((event, session) => {
+      console.log('Auth state changed:', event, session?.user?.email);
+      if (event === 'SIGNED_IN') {
+        setUser(session.user);
+      } else if (event === 'SIGNED_OUT') {
+        setUser(null);
+      }
+    });
+    
+    // Clean up the listener
+    return () => {
+      authListener.subscription.unsubscribe();
+    };
   }, []);
-
+  
   const handleSignOut = async () => {
     try {
-      await signOut();
+      await supabase.auth.signOut();
       setUser(null);
       router.push('/');
     } catch (error) {

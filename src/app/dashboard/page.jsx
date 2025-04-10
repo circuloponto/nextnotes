@@ -15,17 +15,31 @@ import {
   listItem,
   mobileViewTransition
 } from '@/utils/animations';
-import { getNotes, createNote, updateNote, deleteNote } from '@/services/notes';
+import { getNotes, createNote, updateNote, deleteNote, updateNoteReminders, getNotesWithReminders } from '@/services/notes';
 import { useRouter } from 'next/navigation';
 import { getCurrentUser } from '@/services/auth';
 import dynamic from 'next/dynamic';
+import { useToast } from '@/context/ToastContext';
+import ReminderToast from '@/components/ui/ReminderToast';
 
-// Import ClientExportWrapper with no SSR to avoid hydration errors
+// Import reminder utilities directly
+import { requestNotificationPermission, scheduleReminders, onReminderTriggered } from '@/utils/reminderUtils';
+
+// Import components with no SSR to avoid hydration errors
 const ClientExportWrapper = dynamic(() => import('@/components/ClientExportWrapper'), { 
   ssr: false 
 });
 
+const ReminderSettings = dynamic(() => import('@/components/ReminderSettings'), {
+  ssr: false
+});
+
+const CalendarView = dynamic(() => import('@/components/CalendarView'), {
+  ssr: false
+});
+
 const Dashboard = () => {
+  const { addToast } = useToast();
   const [notes, setNotes] = useState([]);
   const [currentSelectedNote, setCurrentSelectedNote] = useState(null);
   const [formData, setFormData] = useState({ title: '', content: '', tags: [] });
@@ -34,6 +48,8 @@ const Dashboard = () => {
   const [isLoading, setIsLoading] = useState(true);
   const [mobileView, setMobileView] = useState('list'); // 'list' or 'editor'
   const [user, setUser] = useState(null);
+  const [activeTab, setActiveTab] = useState('notes'); // 'notes' or 'calendar'
+  const [notesWithReminders, setNotesWithReminders] = useState([]);
   const textareaRef = useRef(null);
   const titleRef = useRef(null);
   const router = useRouter();
@@ -44,8 +60,13 @@ const Dashboard = () => {
   // Helper function to strip HTML tags for display in note list
   const stripHtmlTags = (html) => {
     if (!html) return '';
-    const doc = new DOMParser().parseFromString(html, 'text/html');
-    return doc.body.textContent || '';
+    if (typeof window === 'undefined') return ''; // Return empty string on server-side
+    try {
+      const doc = new DOMParser().parseFromString(html, 'text/html');
+      return doc.body.textContent || '';
+    } catch (error) {
+      return ''; // Return empty string if DOMParser fails
+    }
   };
 
   // Add event listener for window resize
@@ -72,6 +93,7 @@ const Dashboard = () => {
         const { user: currentUser, error } = await getCurrentUser();
         
         if (error || !currentUser) {
+          console.error('Authentication error:', error?.message);
           // Redirect to login if not authenticated
           router.push('/login');
           return;
@@ -84,19 +106,119 @@ const Dashboard = () => {
         
         if (notesError) {
           console.error('Error fetching notes:', notesError);
+          addToast('Failed to load your notes. Please try again.', {
+            type: 'error',
+            duration: 5000,
+          });
           return;
         }
         
         setNotes(userNotes || []);
+        
+        // Only run browser-specific code on the client
+        if (typeof window !== 'undefined') {
+          // Fetch notes with reminders
+          const { notes: reminderNotes, error: reminderError } = await getNotesWithReminders();
+          
+          if (!reminderError) {
+            setNotesWithReminders(reminderNotes || []);
+            
+            // Request notification permission
+            await requestNotificationPermission();
+            
+            // Schedule reminders
+            await scheduleReminders(reminderNotes || []);
+          }
+        }
       } catch (error) {
         console.error('Error checking auth:', error);
+        addToast('An unexpected error occurred. Please try again.', {
+          type: 'error',
+          duration: 5000,
+        });
       } finally {
         setIsLoading(false);
       }
     };
     
     checkAuth();
-  }, [router]);
+  }, [router, addToast]);
+
+  // Check for reminders on page load
+  useEffect(() => {
+    // Only run on client side
+    if (typeof window === 'undefined') return;
+    
+    // Create a function to check for due reminders
+    const checkReminders = async () => {
+      try {
+        // Get notes with reminders
+        const { notes: reminderNotes } = await getNotesWithReminders();
+        
+        if (reminderNotes && reminderNotes.length > 0) {
+          console.log('Scheduling reminders for', reminderNotes.length, 'notes');
+          // Schedule reminders
+          scheduleReminders(reminderNotes);
+        }
+      } catch (error) {
+        console.error('Error checking reminders:', error);
+      }
+    };
+    
+    // Register a listener for reminder events
+    const unsubscribe = onReminderTriggered((reminderNote) => {
+      console.log("Reminder triggered for note:", reminderNote);
+      
+      // Create a direct handler function
+      const handleViewNote = () => {
+        console.log("View button clicked for note:", reminderNote);
+        // Find the note in our list
+        const note = notes.find(n => n.id === reminderNote.id);
+        if (note) {
+          console.log("Note found in current list, selecting it");
+          // Select the note
+          setCurrentSelectedNote(note);
+          setFormData({
+            title: note.title,
+            content: note.content,
+            tags: note.tags || [],
+          });
+          // Switch to notes tab if in calendar view
+          setActiveTab('notes');
+          // On mobile, switch to editor view
+          setMobileView('editor');
+        } else {
+          console.log("Note not found in current list, navigating to:", reminderNote.url);
+          // If note not found in current list, navigate to it
+          router.push(reminderNote.url || `/dashboard?note=${reminderNote.id}`);
+        }
+      };
+      
+      // Show a toast notification that stays until dismissed
+      addToast(
+        <ReminderToast 
+          title={reminderNote.title} 
+          onViewNote={handleViewNote} 
+        />, 
+        {
+          type: 'reminder',
+          duration: Infinity, // Stay until dismissed
+        }
+      );
+    });
+    
+    // Check reminders on page load
+    checkReminders();
+    
+    // Also check reminders every 5 minutes
+    const reminderInterval = setInterval(checkReminders, 5 * 60 * 1000);
+    
+    // Cleanup
+    return () => {
+      clearInterval(reminderInterval);
+      unsubscribe(); // Unregister the reminder listener
+    };
+  }, [addToast, notes, router]);
 
   const handleSelectNote = (note) => {
     setCurrentSelectedNote(note);
@@ -272,6 +394,37 @@ const Dashboard = () => {
     }));
   };
 
+  const handleUpdateReminders = async (reminderData) => {
+    if (!currentSelectedNote) return;
+    
+    try {
+      const { note, error } = await updateNoteReminders(currentSelectedNote.id, reminderData);
+      
+      if (error) {
+        console.error('Error updating reminders:', error);
+        return;
+      }
+      
+      // Update the current selected note
+      setCurrentSelectedNote(note);
+      
+      // Update the note in the notes array
+      const updatedNotes = notes.map(n => 
+        n.id === note.id ? note : n
+      );
+      setNotes(updatedNotes);
+      
+      // Update the notes with reminders
+      const { notes: reminderNotes } = await getNotesWithReminders();
+      setNotesWithReminders(reminderNotes || []);
+      
+      // Reschedule reminders
+      await scheduleReminders(reminderNotes || []);
+    } catch (error) {
+      console.error('Error in handleUpdateReminders:', error);
+    }
+  };
+
   useEffect(() => {
     if (currentSelectedNote) {
       saveChanges();
@@ -286,7 +439,7 @@ const Dashboard = () => {
       {/* Mobile navigation buttons */}
       {isMobile && (
         <motion.div 
-          className="flex border-b border-border"
+          className="flex border-b border-border flex-shrink-0"
           initial={{ y: -20, opacity: 0 }}
           animate={{ y: 0, opacity: 1 }}
           transition={{ duration: 0.3 }}
@@ -330,7 +483,7 @@ const Dashboard = () => {
         {(!isMobile || mobileView === 'list') && (
           <motion.div 
             key="notes-list"
-            className={`${isMobile ? 'w-full' : 'w-full md:w-1/3'} border-r border-border flex flex-col`}
+            className={`${isMobile ? 'w-full h-[calc(100vh-180px)]' : 'w-full md:w-1/3'} border-r border-border flex flex-col overflow-hidden`}
             {...(isMobile ? mobileViewTransition : slideFromLeft)}
             layout
           >
@@ -345,13 +498,56 @@ const Dashboard = () => {
                 <motion.div whileTap={{ scale: 0.95 }}>
                   <Button onClick={handleNewNote} size="small">
                     <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5" viewBox="0 0 20 20" fill="currentColor">
-                      <path fillRule="evenodd" d="M10 5a1 1 0 011 1v3h3a1 1 0 110 2h-3v3a1 1 0 11-2 0v-3H6a1 1 0 110-2h3V6a1 1 0 011-1z" clipRule="evenodd" />
+                      <path fillRule="evenodd" d="M10 5a1 1 0 011 1v3h3a1 1 0 110 2h-3v3a1 1 0 01-2 0v-3H6a1 1 0 110-2h3V6a1 1 0 011-1z" clipRule="evenodd" />
                     </svg>
                   </Button>
                 </motion.div>
               </div>
               
-              <motion.div className="relative" {...fadeIn}>
+              {/* Tabs for Notes and Calendar */}
+              <div className="flex mb-4 border-b border-border">
+                <motion.button
+                  className={`flex-1 py-2 text-center font-medium ${activeTab === 'notes' ? 'text-primary border-b-2 border-primary' : 'text-muted-foreground'}`}
+                  onClick={() => setActiveTab('notes')}
+                  whileHover={{ y: -2 }}
+                  whileTap={{ scale: 0.95 }}
+                  transition={{ type: "spring", stiffness: 400, damping: 17 }}
+                >
+                  <motion.span
+                    initial={{ opacity: 0 }}
+                    animate={{ opacity: 1 }}
+                    transition={{ delay: 0.1 }}
+                    className="flex items-center justify-center gap-1"
+                  >
+                    <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4" viewBox="0 0 20 20" fill="currentColor">
+                      <path d="M9 4.804A7.968 7.968 0 005.5 4c-1.255 0-2.443.29-3.5.804v10A7.969 7.969 0 015.5 14c1.669 0 3.218.51 4.5 1.385A7.962 7.962 0 0114.5 14c1.255 0 2.443.29 3.5.804v-10A7.968 7.968 0 0014.5 4c-1.255 0-2.443.29-3.5.804V12a1 1 0 11-2 0V4.804z" />
+                    </svg>
+                    Notes
+                  </motion.span>
+                </motion.button>
+                <motion.button
+                  className={`flex-1 py-2 text-center font-medium ${activeTab === 'calendar' ? 'text-primary border-b-2 border-primary' : 'text-muted-foreground'}`}
+                  onClick={() => setActiveTab('calendar')}
+                  whileHover={{ y: -2 }}
+                  whileTap={{ scale: 0.95 }}
+                  transition={{ type: "spring", stiffness: 400, damping: 17 }}
+                >
+                  <motion.span
+                    initial={{ opacity: 0 }}
+                    animate={{ opacity: 1 }}
+                    transition={{ delay: 0.2 }}
+                    className="flex items-center justify-center gap-1"
+                  >
+                    <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4" viewBox="0 0 20 20" fill="currentColor">
+                      <path fillRule="evenodd" d="M6 2a1 1 0 00-1 1v1H4a2 2 0 00-2 2v10a2 2 0 002 2h12a2 2 0 002-2V6a2 2 0 00-2-2h-1V3a1 1 0 10-2 0v1H7V3a1 1 0 00-1-1zm0 5a1 1 0 000 2h8a1 1 0 100-2H6z" clipRule="evenodd" />
+                    </svg>
+                    Calendar
+                  </motion.span>
+                </motion.button>
+              </div>
+              
+              {/* Search bar */}
+              <div className="relative" {...fadeIn}>
                 <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
                   <svg className="h-5 w-5 text-muted-foreground" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor" aria-hidden="true">
                     <path fillRule="evenodd" d="M8 4a4 4 0 100 8 4 4 0 000-8zM2 8a6 6 0 1110.89 3.476l4.817 4.817a1 1 0 01-1.414 1.414l-4.816-4.816A6 6 0 012 8z" clipRule="evenodd" />
@@ -364,10 +560,10 @@ const Dashboard = () => {
                   value={searchQuery}
                   onChange={(e) => setSearchQuery(e.target.value)}
                 />
-              </motion.div>
+              </div>
             </div>
             
-            <div className="overflow-y-auto overflow-x-hidden flex-1">
+            <div className="overflow-y-auto overflow-x-hidden flex-1 h-full">
               {isLoading ? (
                 <div className="flex justify-center items-center h-32">
                   <motion.div 
@@ -376,64 +572,112 @@ const Dashboard = () => {
                     transition={{ duration: 1, repeat: Infinity, ease: "linear" }}
                   ></motion.div>
                 </div>
-              ) : filteredNotes.length > 0 ? (
-                <motion.ul 
-                  className="divide-y divide-border"
-                  variants={staggerContainer}
-                  initial="initial"
-                  animate="animate"
-                >
-                  <AnimatePresence>
-                    {filteredNotes.map(note => (
-                      <motion.li 
-                        key={note.id}
-                        className={`p-4 cursor-pointer hover:bg-secondary/50 ${
-                          currentSelectedNote && currentSelectedNote.id === note.id ? 'bg-primary/10' : ''
-                        }`}
-                        onClick={() => handleSelectNote(note)}
-                        variants={listItem}
-                        layout
-                        whileHover={{ x: 5 }}
-                        whileTap={{ scale: 0.98 }}
-                      >
-                        <h3 className="text-md font-medium text-foreground truncate">{note.title}</h3>
-                        <p className="text-sm text-muted-foreground truncate mt-1">{stripHtmlTags(note.content)}</p>
-                        {note.tags && note.tags.length > 0 && (
-                          <div className="flex flex-wrap gap-1 mt-2">
-                            {note.tags.map(tag => (
-                              <motion.span 
-                                key={tag} 
-                                className="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-primary/10 text-primary dark:bg-primary/20 dark:text-primary-foreground border border-primary/20 shadow-sm"
-                                whileHover={{ scale: 1.05 }}
-                              >
-                                {tag}
-                              </motion.span>
-                            ))}
+              ) : activeTab === 'notes' ? (
+                filteredNotes.length > 0 ? (
+                  <motion.ul 
+                    className="divide-y divide-border"
+                    variants={staggerContainer}
+                    initial="initial"
+                    animate="animate"
+                  >
+                    <AnimatePresence>
+                      {filteredNotes.map(note => (
+                        <motion.li 
+                          key={note.id}
+                          className={`p-4 cursor-pointer hover:bg-secondary/50 ${
+                            currentSelectedNote && currentSelectedNote.id === note.id ? 'bg-primary/10' : ''
+                          }`}
+                          onClick={() => handleSelectNote(note)}
+                          variants={listItem}
+                          layout
+                          whileHover={{ x: 5 }}
+                          whileTap={{ scale: 0.98 }}
+                        >
+                          <h3 className="text-md font-medium text-foreground truncate">{note.title}</h3>
+                          <p className="text-sm text-muted-foreground truncate mt-1">{stripHtmlTags(note.content)}</p>
+                          {note.tags && note.tags.length > 0 && (
+                            <div className="flex flex-wrap gap-1 mt-2">
+                              {note.tags.map(tag => (
+                                <motion.span 
+                                  key={tag} 
+                                  className="inline-flex items-center px-2.5 py-1 rounded text-sm font-medium bg-primary/10 text-primary dark:bg-primary/20 dark:text-primary-foreground border border-primary/20 shadow-sm"
+                                  whileHover={{ scale: 1.05 }}
+                                >
+                                  {tag}
+                                </motion.span>
+                              ))}
+                            </div>
+                          )}
+                          <div className="flex items-center justify-between mt-1">
+                            <p className="text-xs text-muted-foreground">
+                              {new Date(note.created_at).toLocaleDateString()}
+                            </p>
+                            {(note.dueDate || note.reminderDate) && (
+                              <div className="flex gap-1">
+                                {note.dueDate && (
+                                  <span className="text-xs px-1.5 py-0.5 bg-amber-500/10 text-amber-500 rounded-full flex items-center">
+                                    <svg 
+                                      xmlns="http://www.w3.org/2000/svg" 
+                                      className="h-3 w-3 mr-0.5" 
+                                      fill="none" 
+                                      viewBox="0 0 24 24" 
+                                      stroke="currentColor"
+                                    >
+                                      <path 
+                                        strokeLinecap="round" 
+                                        strokeLinejoin="round" 
+                                        strokeWidth={2} 
+                                        d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z" 
+                                      />
+                                    </svg>
+                                    Due
+                                  </span>
+                                )}
+                                {note.reminderDate && (
+                                  <span className="text-xs px-1.5 py-0.5 bg-blue-500/10 text-blue-500 rounded-full flex items-center">
+                                    <svg 
+                                      xmlns="http://www.w3.org/2000/svg" 
+                                      className="h-3 w-3 mr-0.5" 
+                                      fill="none" 
+                                      viewBox="0 0 24 24" 
+                                      stroke="currentColor"
+                                    >
+                                      <path 
+                                        strokeLinecap="round" 
+                                        strokeLinejoin="round" 
+                                        strokeWidth={2} 
+                                        d="M15 17h5l-1.405-1.405A2.032 2.032 0 0118 14.158V11a6.002 6.002 0 00-4-5.659V5a2 2 0 10-4 0v.341C7.67 6.165 6 8.388 6 11v3.159c0 .538-.214 1.055-.595 1.436L4 17h5m6 0v1a3 3 0 11-6 0v-1m6 0H9" 
+                                      />
+                                    </svg>
+                                    Reminder
+                                  </span>
+                                )}
+                              </div>
+                            )}
                           </div>
-                        )}
-                        <p className="text-xs text-muted-foreground mt-1">
-                          {new Date(note.created_at).toLocaleDateString()}
-                        </p>
-                      </motion.li>
-                    ))}
-                  </AnimatePresence>
-                </motion.ul>
+                        </motion.li>
+                      ))}
+                    </AnimatePresence>
+                  </motion.ul>
+                ) : (
+                  <motion.div 
+                    className="text-center py-8"
+                    {...fadeIn}
+                  >
+                    <p className="text-muted-foreground">
+                      {searchQuery ? `No notes match "${searchQuery}"` : "No notes yet"}
+                    </p>
+                    {!searchQuery && (
+                      <motion.div whileHover={{ scale: 1.05 }} whileTap={{ scale: 0.95 }}>
+                        <Button onClick={handleNewNote} className="mt-4">
+                          Create your first note
+                        </Button>
+                      </motion.div>
+                    )}
+                  </motion.div>
+                )
               ) : (
-                <motion.div 
-                  className="text-center py-8"
-                  {...fadeIn}
-                >
-                  <p className="text-muted-foreground">
-                    {searchQuery ? `No notes match "${searchQuery}"` : "No notes yet"}
-                  </p>
-                  {!searchQuery && (
-                    <motion.div whileHover={{ scale: 1.05 }} whileTap={{ scale: 0.95 }}>
-                      <Button onClick={handleNewNote} className="mt-4">
-                        Create your first note
-                      </Button>
-                    </motion.div>
-                  )}
-                </motion.div>
+                <CalendarView notes={notesWithReminders} />
               )}
             </div>
           </motion.div>
@@ -445,7 +689,7 @@ const Dashboard = () => {
         {(!isMobile || mobileView === 'editor') && (
           <motion.div 
             key="note-editor"
-            className={`${isMobile ? 'w-full' : 'w-full md:w-2/3'} flex flex-col`}
+            className={`${isMobile ? 'w-full h-[calc(100vh-180px)]' : 'w-full md:w-2/3'} flex flex-col overflow-hidden`}
             initial={isMobile ? { x: 50, opacity: 0 } : { opacity: 0 }}
             animate={isMobile ? { x: 0, opacity: 1 } : { opacity: 1 }}
             exit={isMobile ? { x: 50, opacity: 0 } : { opacity: 0 }}
@@ -478,16 +722,15 @@ const Dashboard = () => {
                   </div>
                   <div className="flex flex-wrap gap-2 justify-end">
                     {isMobile && (
-                      <motion.div 
-                        whileHover={{ scale: 1.05 }} 
-                        whileTap={{ scale: 0.95 }}
-                        initial={{ opacity: 0, x: 10 }}
+                      <motion.div
+                        initial={{ opacity: 0, x: -20 }}
                         animate={{ opacity: 1, x: 0 }}
                         transition={{ delay: 0.2 }}
                       >
                         <Button 
                           variant="outline" 
                           onClick={() => setMobileView('list')}
+                          size="small"
                         >
                           Back
                         </Button>
@@ -515,7 +758,7 @@ const Dashboard = () => {
                       transition={{ delay: 0.3 }}
                     >
                       <Button 
-                        variant="danger" 
+                        variant="destructive" 
                         onClick={() => handleDeleteNote(currentSelectedNote.id)}
                       >
                         Delete
@@ -524,7 +767,7 @@ const Dashboard = () => {
                   </div>
                 </motion.div>
                 <motion.div 
-                  className="p-4 flex-1 overflow-y-auto flex flex-col"
+                  className="p-4 flex-1 overflow-y-auto flex flex-col h-full"
                   initial={{ opacity: 0, y: 20 }}
                   animate={{ opacity: 1, y: 0 }}
                   transition={{ delay: 0.2, duration: 0.4 }}
@@ -596,6 +839,20 @@ const Dashboard = () => {
                     rows={isMobile ? 15 : 20}
                     isMobile={isMobile}
                   />
+                  
+                  {/* Reminder Settings */}
+                  <motion.div 
+                    className="mt-6 border-t border-border pt-4"
+                    initial={{ opacity: 0, y: 20 }}
+                    animate={{ opacity: 1, y: 0 }}
+                    transition={{ delay: 0.3 }}
+                  >
+                    <h3 className="text-md font-medium mb-3 text-foreground">Reminders & Due Dates</h3>
+                    <ReminderSettings 
+                      note={currentSelectedNote}
+                      onSave={handleUpdateReminders}
+                    />
+                  </motion.div>
                 </motion.div>
               </>
             ) : (
