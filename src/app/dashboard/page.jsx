@@ -18,6 +18,12 @@ import {
 import { getNotes, createNote, updateNote, deleteNote } from '@/services/notes';
 import { useRouter } from 'next/navigation';
 import { getCurrentUser } from '@/services/auth';
+import dynamic from 'next/dynamic';
+
+// Import ClientExportWrapper with no SSR to avoid hydration errors
+const ClientExportWrapper = dynamic(() => import('@/components/ClientExportWrapper'), { 
+  ssr: false 
+});
 
 const Dashboard = () => {
   const [notes, setNotes] = useState([]);
@@ -454,12 +460,12 @@ const Dashboard = () => {
             {currentSelectedNote ? (
               <>
                 <motion.div 
-                  className="p-4 border-b border-border flex justify-between items-center"
+                  className="p-4 border-b border-border flex flex-col sm:flex-row sm:justify-between sm:items-center gap-3"
                   initial={{ y: -20, opacity: 0 }}
                   animate={{ y: 0, opacity: 1 }}
                   transition={{ delay: 0.1, duration: 0.3 }}
                 >
-                  <div className="flex-1 mr-4">
+                  <div className="w-full sm:flex-1 sm:mr-4">
                     <motion.input
                       id="title"
                       ref={titleRef}
@@ -470,7 +476,7 @@ const Dashboard = () => {
                       transition={{ duration: 0.2 }}
                     />
                   </div>
-                  <div className="flex space-x-2">
+                  <div className="flex flex-wrap gap-2 justify-end">
                     {isMobile && (
                       <motion.div 
                         whileHover={{ scale: 1.05 }} 
@@ -487,6 +493,20 @@ const Dashboard = () => {
                         </Button>
                       </motion.div>
                     )}
+                    <motion.div 
+                      whileHover={{ scale: 1.05 }} 
+                      whileTap={{ scale: 0.95 }}
+                      initial={{ opacity: 0, x: 10 }}
+                      animate={{ opacity: 1, x: 0 }}
+                      transition={{ delay: 0.3 }}
+                    >
+                      <ClientExportWrapper 
+                        note={{
+                          title: formData.title,
+                          content: formData.content
+                        }}
+                      />
+                    </motion.div>
                     <motion.div 
                       whileHover={{ scale: 1.05 }} 
                       whileTap={{ scale: 0.95 }}
