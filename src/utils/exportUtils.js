@@ -1,37 +1,33 @@
 // We need to import jsPDF and htmlToText only on the client side
 // to avoid hydration errors
-let jsPDF;
-let htmlToText;
-
-// Only import these modules on the client side
-if (typeof window !== 'undefined') {
-  import('jspdf').then(module => {
-    jsPDF = module.jsPDF;
-  });
-  
-  import('html-to-text').then(module => {
-    htmlToText = module.htmlToText;
-  });
-}
 
 /**
  * Convert HTML content to plain text
  * @param {string} htmlContent - HTML content to convert
  * @returns {string} Plain text content
  */
-export const convertToPlainText = (htmlContent) => {
+export const convertToPlainText = async (htmlContent) => {
   // If running on the server, return a simplified version
-  if (typeof window === 'undefined' || !htmlToText) {
+  if (typeof window === 'undefined') {
     return htmlContent.replace(/<[^>]*>/g, '');
   }
   
-  return htmlToText(htmlContent, {
-    wordwrap: 130,
-    selectors: [
-      { selector: 'a', options: { hideLinkHrefIfSameAsText: true } },
-      { selector: 'img', format: 'skip' }
-    ]
-  });
+  try {
+    // Dynamically import html-to-text only on client side
+    const { htmlToText } = await import('html-to-text');
+    
+    return htmlToText(htmlContent, {
+      wordwrap: 130,
+      selectors: [
+        { selector: 'a', options: { hideLinkHrefIfSameAsText: true } },
+        { selector: 'img', format: 'skip' }
+      ]
+    });
+  } catch (error) {
+    console.error('Error importing html-to-text:', error);
+    // Fallback to basic HTML stripping
+    return htmlContent.replace(/<[^>]*>/g, '');
+  }
 };
 
 /**
@@ -90,36 +86,44 @@ export const convertToMarkdown = (htmlContent) => {
  * Export note as PDF
  * @param {Object} note - Note object with title and content
  */
-export const exportAsPDF = (note) => {
+export const exportAsPDF = async (note) => {
   // Only run on client side
-  if (typeof window === 'undefined' || !jsPDF) {
+  if (typeof window === 'undefined') {
     console.error('PDF export is only available in the browser');
     return;
   }
   
-  const { title, content } = note;
-  
-  // Create a new PDF document
-  const doc = new jsPDF();
-  
-  // Set title
-  doc.setFontSize(18);
-  doc.text(title, 20, 20);
-  
-  // Add content
-  doc.setFontSize(12);
-  
-  // Convert HTML to plain text for simplicity
-  const textContent = convertToPlainText(content);
-  
-  // Split text into lines that fit the page width
-  const splitText = doc.splitTextToSize(textContent, 170);
-  
-  // Add text with proper positioning
-  doc.text(splitText, 20, 30);
-  
-  // Save the PDF
-  doc.save(`${title.replace(/\s+/g, '_')}.pdf`);
+  try {
+    // Dynamically import jsPDF only on client side
+    const { jsPDF } = await import('jspdf');
+    
+    const { title, content } = note;
+    
+    // Create a new PDF document
+    const doc = new jsPDF();
+    
+    // Set title
+    doc.setFontSize(18);
+    doc.text(title, 20, 20);
+    
+    // Add content
+    doc.setFontSize(12);
+    
+    // Convert HTML to plain text for simplicity
+    const textContent = await convertToPlainText(content);
+    
+    // Split text into lines that fit the page width
+    const splitText = doc.splitTextToSize(textContent, 170);
+    
+    // Add text with proper positioning
+    doc.text(splitText, 20, 30);
+    
+    // Save the PDF
+    doc.save(`${title.replace(/\s+/g, '_')}.pdf`);
+  } catch (error) {
+    console.error('Error generating PDF:', error);
+    alert('Failed to generate PDF. Please try again later.');
+  }
 };
 
 /**
@@ -133,55 +137,65 @@ export const exportAsMarkdown = (note) => {
     return;
   }
   
-  const { title, content } = note;
-  
-  // Convert HTML to Markdown
-  const markdown = `# ${title}\n\n${convertToMarkdown(content)}`;
-  
-  // Create a download link
-  const blob = new Blob([markdown], { type: 'text/markdown' });
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement('a');
-  a.href = url;
-  a.download = `${title.replace(/\s+/g, '_')}.md`;
-  
-  // Trigger download
-  document.body.appendChild(a);
-  a.click();
-  
-  // Cleanup
-  document.body.removeChild(a);
-  URL.revokeObjectURL(url);
+  try {
+    const { title, content } = note;
+    
+    // Convert HTML to Markdown
+    const markdown = `# ${title}\n\n${convertToMarkdown(content)}`;
+    
+    // Create a download link
+    const blob = new Blob([markdown], { type: 'text/markdown' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `${title.replace(/\s+/g, '_')}.md`;
+    
+    // Trigger download
+    document.body.appendChild(a);
+    a.click();
+    
+    // Cleanup
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+  } catch (error) {
+    console.error('Error exporting to Markdown:', error);
+    alert('Failed to export as Markdown. Please try again later.');
+  }
 };
 
 /**
  * Export note as plain text file
  * @param {Object} note - Note object with title and content
  */
-export const exportAsText = (note) => {
+export const exportAsText = async (note) => {
   // Only run on client side
   if (typeof window === 'undefined') {
     console.error('Text export is only available in the browser');
     return;
   }
   
-  const { title, content } = note;
-  
-  // Convert HTML to plain text
-  const text = `${title}\n\n${convertToPlainText(content)}`;
-  
-  // Create a download link
-  const blob = new Blob([text], { type: 'text/plain' });
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement('a');
-  a.href = url;
-  a.download = `${title.replace(/\s+/g, '_')}.txt`;
-  
-  // Trigger download
-  document.body.appendChild(a);
-  a.click();
-  
-  // Cleanup
-  document.body.removeChild(a);
-  URL.revokeObjectURL(url);
+  try {
+    const { title, content } = note;
+    
+    // Convert HTML to plain text
+    const text = `${title}\n\n${await convertToPlainText(content)}`;
+    
+    // Create a download link
+    const blob = new Blob([text], { type: 'text/plain' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `${title.replace(/\s+/g, '_')}.txt`;
+    
+    // Trigger download
+    document.body.appendChild(a);
+    a.click();
+    
+    // Cleanup
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+  } catch (error) {
+    console.error('Error exporting to text:', error);
+    alert('Failed to export as text. Please try again later.');
+  }
 };
