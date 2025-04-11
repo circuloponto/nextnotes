@@ -3,6 +3,7 @@ import "./globals.css";
 import NavbarWrapper from "@/components/NavbarWrapper";
 import { ThemeProvider } from "@/components/ThemeProvider";
 import { ToastProvider } from "@/context/ToastContext";
+import ClientLayout from "@/components/ClientLayout";
 
 const geistSans = Geist({
   variable: "--font-geist-sans",
@@ -28,10 +29,9 @@ export default function RootLayout({ children }) {
       >
         <ThemeProvider>
           <ToastProvider>
-            <NavbarWrapper />
-            <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
+            <ClientLayout>
               {children}
-            </main>
+            </ClientLayout>
           </ToastProvider>
         </ThemeProvider>
       </body>

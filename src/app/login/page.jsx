@@ -55,9 +55,11 @@ export default function Login() {
         throw error;
       }
       
-      if (data) {
+      if (data?.user) {
         // Navigate to dashboard on success
         router.push('/dashboard');
+      } else {
+        throw new Error('No user data received');
       }
     } catch (error) {
       console.error('Login error:', error);
@@ -68,13 +70,13 @@ export default function Login() {
   };
 
   return (
-    <div className="flex justify-center items-center py-12">
-      <div className="max-w-md w-full space-y-8 bg-white p-10 rounded-xl shadow-md dark:bg-gray-800 dark:text-white">
+    <div className="flex justify-center items-center py-12 bg-background">
+      <div className="max-w-md w-full space-y-8 bg-card p-10 rounded-xl shadow-md text-card-foreground">
         <div className="text-center">
-          <h2 className="text-3xl font-extrabold text-gray-900 dark:text-white">Sign in to your account</h2>
-          <p className="mt-2 text-sm text-gray-600 dark:text-gray-300">
+          <h2 className="text-3xl font-extrabold text-foreground">Sign in to your account</h2>
+          <p className="mt-2 text-sm text-muted-foreground">
             Or{' '}
-            <Link href="/signup" className="font-medium text-blue-600 hover:text-blue-500 dark:text-blue-400 dark:hover:text-blue-300">
+            <Link href="/signup" className="font-medium text-primary hover:text-primary/90">
               create a new account
             </Link>
           </p>
@@ -82,7 +84,7 @@ export default function Login() {
         
         <form className="mt-8 space-y-6" onSubmit={handleSubmit}>
           {errors.form && (
-            <div className="p-3 bg-red-50 text-red-500 rounded-md text-sm dark:bg-red-900/30 dark:text-red-300">
+            <div className="p-3 bg-destructive/10 text-destructive rounded-md text-sm">
               {errors.form}
             </div>
           )}
@@ -115,14 +117,14 @@ export default function Login() {
                 id="remember-me"
                 name="remember-me"
                 type="checkbox"
-                className="h-4 w-4 text-blue-600 focus:ring-blue-500 border-gray-300 rounded dark:border-gray-600 dark:bg-gray-700"
+                className="h-4 w-4 text-primary focus:ring-primary border-input rounded bg-background"
               />
-              <label htmlFor="remember-me" className="ml-2 block text-sm text-gray-900 dark:text-gray-300">
+              <label htmlFor="remember-me" className="ml-2 block text-sm text-foreground">
                 Remember me
               </label>
             </div>
             
-            <Link href="/reset-password" className="text-sm font-medium text-blue-600 hover:text-blue-500 dark:text-blue-400 dark:hover:text-blue-300">
+            <Link href="/reset-password" className="text-sm font-medium text-primary hover:text-primary/90">
               Forgot your password?
             </Link>
           </div>
@@ -132,6 +134,7 @@ export default function Login() {
               type="submit"
               className="w-full"
               disabled={isLoading}
+              variant="primary"
             >
               {isLoading ? 'Signing in...' : 'Sign in'}
             </Button>
